@@ -1,5 +1,5 @@
 ---
-title: "CUB SDM Report v2.5"
+title: "New Phytologist Places"
 author: "Avery Hill"
 date: "`r Sys.Date()`"
 output: 
@@ -54,13 +54,105 @@ library(dplyr)
 library(terra)
 # library(gt)
 library(duckdb)
+library(tidyr)
+library(duckdbfs)
+library(readr)
 
+options(scipen = 999)
 ```
 
 
 ```{r, include=F}
-# Load in duckdb and everything
+# Load in duckdb and occurrences
+dcon <- dbConnect(duckdb())
+dcon |> dbExecute("INSTALL spatial; LOAD spatial;")
+dcon |> dbExecute("
+CREATE VIEW occurrences AS
+SELECT * EXCLUDE geom, ST_Point(decimallongitude, decimallatitude) AS geom
+FROM read_parquet('occurrences.parquet');")
 ```
 
-# Mount Tam
+# Marble Mountains
+```{r}
+fluidRow(
+  radioButtons("dup_choice", "Deduplicate?",
+                   choices = list("yes", "no"))
+  )
+```
+
+
+
+```{r}
+mar_occ <- dcon |> 
+  tbl("occurrences") |> 
+  filter(place_name == "Marble/Salmon Mountains-Trinity Alps")
+
+herb_n_inat_count <- mar_occ |> 
+  group_by(basisofrecord) |> summarise(N = n()) |> 
+  filter(basisofrecord %in% c("HUMAN_OBSERVATION", "PRESERVED_SPECIMEN")) |> 
+  pivot_wider(names_from = basisofrecord, values_from = N) |> 
+  collect()
+
+```
+
+There are `r renderText(herb_n_inat_count$PRESERVED_SPECIMEN + herb_n_inat_count$HUMAN_OBSERVATION)` total observations,
+`r renderText((100 * herb_n_inat_count$PRESERVED_SPECIMEN / (herb_n_inat_count$PRESERVED_SPECIMEN + herb_n_inat_count$HUMAN_OBSERVATION)) |> round(1))`% of which are herbarium records (`r herb_n_inat_count$PRESERVED_SPECIMEN` herbarium records; `r herb_n_inat_count$HUMAN_OBSERVATION` iNaturalist records)
+
+```{r}
+rast_occ <- mar_occ |> 
+    mutate(
+      latitude = round(decimallatitude, 2),
+      longitude = round(decimallongitude, 2)
+    ) |>
+    count(longitude, latitude, species, basisofrecord,
+          institutioncode, coordinateuncertaintyinmeters) |> 
+  collect()
+
+count_rast <- rast_occ |> rast(crs = "epsg:4326")
+
+res_km <- res(count_rast) * 111
+
+pal <- colorNumeric("viridis", 
+                                       values(count_rast[["n"]]), 
+                                       na.color = "transparent")
+leaflet() |>
+  addProviderTiles("CartoDB.Positron") |> 
+  addRasterImage(count_rast[["n"]], 
+                 colors = pal) |> 
+  addLegend(
+    pal = pal,
+    values = values(count_rast[["n"]]),
+    title = sprintf("Count / %skm", res_km[1] |> round(2)),  # Adjust title to what the data represents
+    position = "bottomright"
+  )
+```
+
+```{r}
+# Download
+fluidRow(downloadButton("download_gpkg", "Download as GPKG"),
+      downloadButton("download_csv", "Download as CSV"))
+
+ output$download_gpkg <- downloadHandler(
+    filename = function() {
+      paste0("occurrences", ".gpkg")
+    },
+    content = function(file) {
+      # Write the tibble to GPKG format
+      st_write(mar_occ |> to_sf(conn = dcon), dsn = file, driver = "GPKG")
+    }
+  )
+  
+  # CSV Download
+  output$download_csv <- downloadHandler(
+    filename = function() {
+      paste0("occurrences", ".csv")
+    },
+    content = function(file) {
+      # Write the tibble to CSV format
+      write_csv(mar_occ |> select(-geom) |> collect(), file)
+    }
+  )
+
+```
+
 

@@ -79,32 +79,17 @@ toc()
 # this took 51 seconds
 
 
-# Can't read it back in, more errors with
+# Can't use the native geometry for some reason, but just recreate it with lonlat
 con |> dbExecute("
 DROP VIEW IF EXISTS target;
 CREATE VIEW target AS
-SELECT *
+SELECT * EXCLUDE geom, ST_Point(decimallongitude, decimallatitude) AS geom
 FROM read_parquet('~/Projects/new-phytologist/shiny-aoi-exploration/occurrences.parquet');")
+
 
 x <- con |>
   tbl("target") |>
   to_sf(conn = con)
 
 
-x <- st_read(con, query = "SELECT *, ST_GEOMFROMWKB(geom) AS geom FROM target")
-
-county_crosswalk <- open_dataset("~/Projects/new-phytologist/shiny-aoi-exploration/occurrences.parquet", conn = con) |>
-  to_sf(conn = con)
-
-plot(county_crosswalk)
-
-con |> dbExecute("
-COPY (
-  SELECT gbif.*
-  FROM gbif
-  WHERE kingdom = 'Plantae'
-  # AND kingdom = 'Plantae'
-  AND (coordinateuncertaintyinmeters < 500 OR coordinateuncertaintyinmeters is NULL)
-  AND species IS NOT NULL
-  AND NOT species = '';
-  ")
+con |> dbDisconnect(shutdown = T)
