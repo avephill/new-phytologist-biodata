@@ -182,15 +182,44 @@ herb_n_inat_count <- reactive({
   pivot_wider(names_from = basisofrecord, values_from = N) |>
   collect()
 })
+
+herb_n_inat_speccount <- reactive({
+  req(mar_occ())
+  mar_occ() |>
+  group_by(basisofrecord) |> 
+    distinct(species) |> 
+    summarise(N = n()) |>
+  filter(basisofrecord %in% c("HUMAN_OBSERVATION", "PRESERVED_SPECIMEN")) |>
+  pivot_wider(names_from = basisofrecord, values_from = N) |>
+  collect()
+})
+
+herb_n_inat_totalspecies <- reactive({
+  req(mar_occ())
+  # browser()
+  mar_occ() |>
+    filter(basisofrecord %in% c("HUMAN_OBSERVATION", "PRESERVED_SPECIMEN")) |> 
+    distinct(species) |>
+    count() |> 
+    collect()
+})
   
 
 ```
 
-
+#### Observations
 There are `r renderText(herb_n_inat_count()$PRESERVED_SPECIMEN + herb_n_inat_count()$HUMAN_OBSERVATION)` total observations,
 `r renderText((100 * herb_n_inat_count()$PRESERVED_SPECIMEN / (herb_n_inat_count()$PRESERVED_SPECIMEN + herb_n_inat_count()$HUMAN_OBSERVATION)) |> round(1))`% of which are herbarium records.
 
 (`r renderText(herb_n_inat_count()$PRESERVED_SPECIMEN)` herbarium records; `r renderText(herb_n_inat_count()$HUMAN_OBSERVATION)` iNaturalist records)
+
+#### Species
+There are `r renderText(herb_n_inat_totalspecies()$n)` total species,
+`r renderText((100 * herb_n_inat_speccount()$PRESERVED_SPECIMEN / (herb_n_inat_totalspecies()$n)) |> round(1))`% of which are found in herbarium records.
+
+(`r renderText(herb_n_inat_speccount()$PRESERVED_SPECIMEN)` species in herbarium records; `r renderText(herb_n_inat_speccount()$HUMAN_OBSERVATION)` species in iNaturalist records)
+
+
 
 
 ```{r}
