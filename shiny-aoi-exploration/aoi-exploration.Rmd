@@ -1,12 +1,12 @@
 ---
-title: "New Phytologist Places"
+title: "New Phytologist Areas of Interest"
 author: "Avery Hill"
 date: "`r Sys.Date()`"
-output: 
-  rmdformats::robobook:
+# output: 
+  # rmdformats::robobook:
     # toc: true
     # toc_float: true
-    toc_depth: 6
+    # toc_depth: 6
 runtime: shiny
 resource_files:
   - data
@@ -57,6 +57,8 @@ library(duckdb)
 library(tidyr)
 library(duckdbfs)
 library(readr)
+library(purrr)
+library(shinyWidgets)
 
 options(scipen = 999)
 ```
@@ -70,63 +72,176 @@ dcon |> dbExecute("
 CREATE VIEW occurrences AS
 SELECT * EXCLUDE geom, ST_Point(decimallongitude, decimallatitude) AS geom
 FROM read_parquet('occurrences.parquet');")
+
+# Places
+dcon |> dbExecute("
+CREATE VIEW places AS
+SELECT * EXCLUDE geom, ST_ASTEXT(ST_GEOMFROMWKB(geom)) AS geom
+FROM read_parquet('place_boundaries.parquet');")
 ```
 
-# Marble Mountains
 ```{r}
+# Place selection
+places <- dcon |> 
+  tbl("occurrences") |> 
+  distinct(place_name) |> 
+  pull(1)
+
 fluidRow(
-  radioButtons("dup_choice", "Deduplicate?",
-                   choices = list("yes", "no"))
+  radioGroupButtons(
+   inputId = "place",
+   # label ="Deduplicate?",
+   selected = "Marble/Salmon Mountains",
+   width = "75vw",
+   choices = places,
+   justified = TRUE
+)
   )
 ```
 
 
+```{r}
+fluidRow(
+  h1(renderText(input$place)),
+  radioGroupButtons(
+   inputId = "dup_choice",
+   label ="Remove duplicate records?",
+   choices = c("yes", "no"),
+   selected = "no"
+   # justified = TRUE
+   ),
+  radioGroupButtons(
+   inputId = "obs_type",
+   choices = c("All", 
+               "iNaturalist" = "HUMAN_OBSERVATION", 
+               "Herbaria"  =  "PRESERVED_SPECIMEN"),
+   selected = "All",
+   width = "50vw",
+   justified = TRUE
+   )
+  )
+```
 
 ```{r}
-mar_occ <- dcon |> 
-  tbl("occurrences") |> 
-  filter(place_name == "Marble/Salmon Mountains-Trinity Alps")
 
-herb_n_inat_count <- mar_occ |> 
-  group_by(basisofrecord) |> summarise(N = n()) |> 
-  filter(basisofrecord %in% c("HUMAN_OBSERVATION", "PRESERVED_SPECIMEN")) |> 
-  pivot_wider(names_from = basisofrecord, values_from = N) |> 
-  collect()
+# dcon |> tbl("places")
+# x <- dcon |> tbl("places") |> 
+#   collect() |> 
+#   st_as_sf(wkt = "geom")
+#   
+# 
+# x |> st_as_sf(wkt = "geometry")
+# x |> slice(1) |> View()
+# Messing with filtering duplicates
+
+# cnames <- occ |> colnames() |> 
+#   setdiff(c("gbifid", "lastinterpreted", 
+#             "eventdate", "catalognumber", "dateidentified", 
+#             "occurrenceid"))
+# occ |> count()
+# occ |> distinct(across(all_of(cnames))) |> count()
+# x <- occ |> distinct(across(all_of(cnames))) |> collect() |> sample_n(100)
+# 
+# occ |> distinct(species, decimallatitude, decimallongitude, year, month, day,
+#                 place_name, stateprovince, coordinateuncertaintyinmeters,
+#                 basisofrecord, geom) |> count() # notice that institutioncode is out
 
 ```
 
-There are `r renderText(herb_n_inat_count$PRESERVED_SPECIMEN + herb_n_inat_count$HUMAN_OBSERVATION)` total observations,
-`r renderText((100 * herb_n_inat_count$PRESERVED_SPECIMEN / (herb_n_inat_count$PRESERVED_SPECIMEN + herb_n_inat_count$HUMAN_OBSERVATION)) |> round(1))`% of which are herbarium records (`r herb_n_inat_count$PRESERVED_SPECIMEN` herbarium records; `r herb_n_inat_count$HUMAN_OBSERVATION` iNaturalist records)
 
 ```{r}
-rast_occ <- mar_occ |> 
+mar_occ <- reactive({
+  
+  req(input$place, input$dup_choice)
+  occ <- dcon |> 
+  tbl("occurrences") |> 
+    filter(place_name == input$place)
+  
+  if(input$dup_choice == "yes"){
+    
+    occ <- occ |> 
+      distinct(species, decimallatitude, decimallongitude, year, month, day,
+                place_name, stateprovince, coordinateuncertaintyinmeters,
+                basisofrecord, geom) # notice that institutioncode is out
+  }
+  
+  if(input$obs_type != "All"){
+    occ <- occ |> 
+      filter(basisofrecord == input$obs_type)
+  }
+  
+  occ
+})
+  
+
+herb_n_inat_count <- reactive({
+  req(mar_occ())
+  mar_occ() |>
+  group_by(basisofrecord) |> summarise(N = n()) |>
+  filter(basisofrecord %in% c("HUMAN_OBSERVATION", "PRESERVED_SPECIMEN")) |>
+  pivot_wider(names_from = basisofrecord, values_from = N) |>
+  collect()
+})
+  
+
+```
+
+
+There are `r renderText(herb_n_inat_count()$PRESERVED_SPECIMEN + herb_n_inat_count()$HUMAN_OBSERVATION)` total observations,
+`r renderText((100 * herb_n_inat_count()$PRESERVED_SPECIMEN / (herb_n_inat_count()$PRESERVED_SPECIMEN + herb_n_inat_count()$HUMAN_OBSERVATION)) |> round(1))`% of which are herbarium records.
+
+(`r renderText(herb_n_inat_count()$PRESERVED_SPECIMEN)` herbarium records; `r renderText(herb_n_inat_count()$HUMAN_OBSERVATION)` iNaturalist records)
+
+
+```{r}
+
+output$map <- renderLeaflet({
+  rast_occ <- mar_occ() |>
     mutate(
       latitude = round(decimallatitude, 2),
       longitude = round(decimallongitude, 2)
     ) |>
-    count(longitude, latitude, species, basisofrecord,
-          institutioncode, coordinateuncertaintyinmeters) |> 
+    count(longitude, latitude
+          # basisofrecord,
+          # institutioncode, 
+          #coordinateuncertaintyinmeters
+          ) |>
   collect()
 
 count_rast <- rast_occ |> rast(crs = "epsg:4326")
 
+boundary <- dcon |> 
+  tbl("places") |> 
+  filter(name == input$place) |> 
+  collect() |> 
+  st_as_sf(wkt = "geom")
+
 res_km <- res(count_rast) * 111
 
-pal <- colorNumeric("viridis", 
-                                       values(count_rast[["n"]]), 
-                                       na.color = "transparent")
+pal <- colorNumeric("viridis",
+                    values(count_rast[["n"]]),
+                    na.color = "transparent")
 leaflet() |>
-  addProviderTiles("CartoDB.Positron") |> 
-  addRasterImage(count_rast[["n"]], 
-                 colors = pal) |> 
+  addProviderTiles("CartoDB.Positron") |>
+  addRasterImage(count_rast[["n"]],
+                 colors = pal) |>
+  addPolygons(data = boundary,
+              color = "blue",  # Set polygon border color
+              fillOpacity = 0,
+              weight = 2) |>
   addLegend(
     pal = pal,
     values = values(count_rast[["n"]]),
-    title = sprintf("Count / %skm", res_km[1] |> round(2)),  # Adjust title to what the data represents
+    title = sprintf("Obs. Count / %skm", res_km[1] |> round(2)),
     position = "bottomright"
   )
+})
+
+leafletOutput("map")
+
 ```
 
+#### Download currently filtered data?
 ```{r}
 # Download
 fluidRow(downloadButton("download_gpkg", "Download as GPKG"),
@@ -134,25 +249,38 @@ fluidRow(downloadButton("download_gpkg", "Download as GPKG"),
 
  output$download_gpkg <- downloadHandler(
     filename = function() {
-      paste0("occurrences", ".gpkg")
+      paste0(input$place, "_occurrences", ".gpkg")
     },
     content = function(file) {
-      # Write the tibble to GPKG format
-      st_write(mar_occ |> to_sf(conn = dcon), dsn = file, driver = "GPKG")
+      # Write the sf to GPKG format
+      clean_occ <- mar_occ() |>
+        select(-geom) |>
+        collect() |>
+        # Need to clean lists out
+        mutate(across(where(is.list), ~ map(., toString))) |>
+        unnest(cols = where(is.list)) |>
+        st_as_sf(coords = c("decimallongitude", "decimallatitude"),
+           crs = 4326)
+      write_sf(clean_occ, dsn = file)
     }
   )
-  
+
   # CSV Download
   output$download_csv <- downloadHandler(
     filename = function() {
-      paste0("occurrences", ".csv")
+      paste0(input$place, "_occurrences", ".csv")
     },
     content = function(file) {
       # Write the tibble to CSV format
-      write_csv(mar_occ |> select(-geom) |> collect(), file)
+
+      write_csv(mar_occ() |> select(-geom) |> collect(), file)
     }
   )
 
 ```
 
+---
+Note: The column 'basisofrecord' is the GBIF column that indicates how the data were collected.
+There are two values here, HUMAN_OBSERVATION and PRESERVED_SPECIMEN.
+These practically correspond to iNaturalist and herbaria, respectively.
 
