@@ -154,8 +154,9 @@ mar_occ <- reactive({
   
   req(input$place, input$dup_choice)
   occ <- dcon |> 
-  tbl("occurrences") |> 
-    filter(place_name == input$place)
+    tbl("occurrences") |> 
+    filter(place_name == input$place,
+           basisofrecord %in% c("HUMAN_OBSERVATION", "PRESERVED_SPECIMEN"))
   
   if(input$dup_choice == "yes"){
     
@@ -178,7 +179,7 @@ herb_n_inat_count <- reactive({
   req(mar_occ())
   mar_occ() |>
   group_by(basisofrecord) |> summarise(N = n()) |>
-  filter(basisofrecord %in% c("HUMAN_OBSERVATION", "PRESERVED_SPECIMEN")) |>
+  # filter(basisofrecord %in% c("HUMAN_OBSERVATION", "PRESERVED_SPECIMEN")) |>
   pivot_wider(names_from = basisofrecord, values_from = N) |>
   collect()
 })
@@ -189,7 +190,7 @@ herb_n_inat_speccount <- reactive({
   group_by(basisofrecord) |> 
     distinct(species) |> 
     summarise(N = n()) |>
-  filter(basisofrecord %in% c("HUMAN_OBSERVATION", "PRESERVED_SPECIMEN")) |>
+  # filter(basisofrecord %in% c("HUMAN_OBSERVATION", "PRESERVED_SPECIMEN")) |>
   pivot_wider(names_from = basisofrecord, values_from = N) |>
   collect()
 })
@@ -198,7 +199,7 @@ herb_n_inat_totalspecies <- reactive({
   req(mar_occ())
   # browser()
   mar_occ() |>
-    filter(basisofrecord %in% c("HUMAN_OBSERVATION", "PRESERVED_SPECIMEN")) |> 
+    # filter(basisofrecord %in% c("HUMAN_OBSERVATION", "PRESERVED_SPECIMEN")) |> 
     distinct(species) |>
     count() |> 
     collect()
@@ -274,7 +275,8 @@ leafletOutput("map")
 ```{r}
 # Download
 fluidRow(downloadButton("download_gpkg", "Download as GPKG"),
-      downloadButton("download_csv", "Download as CSV"))
+      downloadButton("download_csv", "Download as CSV"),
+downloadButton("download_spec", "Download species lists"))
 
  output$download_gpkg <- downloadHandler(
     filename = function() {
@@ -303,6 +305,22 @@ fluidRow(downloadButton("download_gpkg", "Download as GPKG"),
       # Write the tibble to CSV format
 
       write_csv(mar_occ() |> select(-geom) |> collect(), file)
+    }
+  )
+  
+  # Species lists download
+  output$download_spec <- downloadHandler(
+    filename = function() {
+      paste0(input$place, "_species_list", ".csv")
+    },
+    content = function(file) {
+      # Write the tibble to CSV format
+
+      write_csv(mar_occ() |> 
+                  distinct(species, basisofrecord) |> 
+                  arrange(species) |> 
+                  collect(), 
+                file)
     }
   )
 
