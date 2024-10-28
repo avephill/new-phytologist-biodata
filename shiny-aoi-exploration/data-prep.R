@@ -3,7 +3,8 @@ library(dplyr)
 library(duckdbfs)
 library(tictoc)
 library(sf)
-library(sfarrow)
+# library(sfarrow)
+library(arrow)
 
 con <- dbConnect(duckdb())
 con |> dbExecute("INSTALL spatial; LOAD spatial;")
@@ -55,7 +56,16 @@ all_places <- bind_rows(santamonica, onetam, marble) |>
 
 
 # Write to parquet
-st_write_parquet(all_places, "place_boundaries.parquet")
+# This isn't writing the correct metadata and the last update for sfarrow package is old
+# st_write_parquet(all_places, "place_boundaries.parquet")
+
+# New way just using WKT
+all_places |> 
+  tibble() |>
+  mutate(geom = st_as_text(geom)) |> 
+  write_parquet("place_boundaries.parquet")
+
+
 
 
 
@@ -82,8 +92,9 @@ COPY (
   FROM gbif
   INNER JOIN places
   ON ST_INTERSECTS(gbif.geom, places.geom)
-  AND kingdom = 'Plantae'
-  AND (coordinateuncertaintyinmeters < 500 OR coordinateuncertaintyinmeters is NULL)
+  AND phylum = 'Tracheophyta'
+  -- AND kingdom = 'Plantae'
+  -- AND (coordinateuncertaintyinmeters < 500 OR coordinateuncertaintyinmeters is NULL)
   AND species IS NOT NULL
   AND stateprovince = 'California'
   AND NOT species = '')
@@ -93,7 +104,7 @@ COPY (
   )
 )
 toc()
-# this took 51 seconds
+# this took 358 sec
 
 # Read it back in
 # Can't use the native geometry for some reason, but just recreate it with lonlat
@@ -107,4 +118,5 @@ con |> tbl("target") |> count()
 
 
 con |> dbDisconnect(shutdown = T)
+
 
