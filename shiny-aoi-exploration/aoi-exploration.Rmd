@@ -1,6 +1,6 @@
 ---
 title: "New Phytologist Areas of Interest"
-author: "Avery Hill"
+# author: "Avery Hill"
 date: "`r Sys.Date()`"
 # output: 
   # rmdformats::robobook:
@@ -54,11 +54,14 @@ library(dplyr)
 library(terra)
 # library(gt)
 library(duckdb)
+library(dbplyr)
 library(tidyr)
-library(duckdbfs)
+# library(duckdbfs)
 library(readr)
 library(purrr)
 library(shinyWidgets)
+library(DT)
+library(stringr)
 
 options(scipen = 999)
 ```
@@ -74,11 +77,18 @@ SELECT * EXCLUDE geom, ST_Point(decimallongitude, decimallatitude) AS geom
 FROM read_parquet('occurrences.parquet');")
 
 # Places
+# dcon |> dbExecute("
+# CREATE VIEW places AS
+# SELECT * EXCLUDE geom, ST_ASTEXT(ST_GEOMFROMWKB(geom)) AS geom
+# FROM read_parquet('place_boundaries.parquet');")
 dcon |> dbExecute("
 CREATE VIEW places AS
-SELECT * EXCLUDE geom, ST_ASTEXT(ST_GEOMFROMWKB(geom)) AS geom
+SELECT *
 FROM read_parquet('place_boundaries.parquet');")
+
 ```
+
+---
 
 ```{r}
 # Place selection
@@ -103,48 +113,68 @@ fluidRow(
 ```{r}
 fluidRow(
   h1(renderText(input$place)),
-  radioGroupButtons(
-   inputId = "dup_choice",
-   label ="Remove duplicate records?",
-   choices = c("yes", "no"),
-   selected = "no"
-   # justified = TRUE
-   ),
-  radioGroupButtons(
-   inputId = "obs_type",
-   choices = c("All", 
-               "iNaturalist" = "HUMAN_OBSERVATION", 
-               "Herbaria"  =  "PRESERVED_SPECIMEN"),
-   selected = "All",
-   width = "50vw",
-   justified = TRUE
-   )
+  wellPanel(
+    h5("Remove duplicate records?"),
+    radioGroupButtons(
+     inputId = "dup_choice",
+     # label ="Remove duplicate records?",
+     choices = c("yes", "no"),
+     selected = "no"
+     # justified = TRUE
+     ),
+    h5("Observation type"),
+    radioGroupButtons(
+     inputId = "obs_type",
+     choices = c("All", 
+                 "iNaturalist" = "HUMAN_OBSERVATION", 
+                 "Herbaria"  =  "PRESERVED_SPECIMEN"),
+     selected = "All",
+     width = "50vw",
+     justified = TRUE
+     ),
+    h5("Filter by coordinate uncertainty?"),
+    radioGroupButtons(
+     inputId = "uncert_filter",
+     choices = c("No Filter", 
+                 "Less than 500m",
+                 "Less than 1000m",
+                 "Less than 25km"),
+     selected = "No Filter",
+     width = "50vw",
+     justified = TRUE
+     )
+    )
   )
 ```
 
 ```{r}
+x <- dcon |> tbl("occurrences") |>
+  colnames()
+  # filter(institutioncode == "iNaturalist")
 
-# dcon |> tbl("places")
-# x <- dcon |> tbl("places") |> 
+# dcon |> tbl("occurrences") |> select(eventdate) |> arrange(desc(eventdate))
+
+# dcon |> tbl("occurrences") |>
+#   # filter(institutioncode == "iNaturalist") |>
+#   select(species, verbatimscientificname) |> 
+#   distinct() |> 
 #   collect() |> 
-#   st_as_sf(wkt = "geom")
-#   
+#   # This takes care of taxa with ' × ' between genus and species
+#   mutate(verbatim_as_binomial = str_replace_all(verbatimscientificname, "\\s+\\w\\s+", " ")) |> 
+#   # mutate(verbatim_as_binomial = sql("REGEXP_EXTRACT(verbatimscientificname, '^\\w+\\s+\\w+(?:-\\w+)?')")) |> 
+#     mutate(verbatim_as_binomial = str_extract(verbatimscientificname, "^\\w+\\s+\\w+(?:-\\w+)?")) |> 
+#   rename(gbif_binomial = species) |> 
+#   filter(gbif_binomial != verbatim_as_binomial) |> 
+#   select(
+#     gbif_binomial,
+#          verbatim_as_binomial,
+#     verbatimscientificname
+#          ) |> 
+#   distinct(gbif_binomial, verbatim_as_binomial, .keep_all = T) |> 
+#         arrange(gbif_binomial) |> 
+#   # collect() |> 
+#     View()
 # 
-# x |> st_as_sf(wkt = "geometry")
-# x |> slice(1) |> View()
-# Messing with filtering duplicates
-
-# cnames <- occ |> colnames() |> 
-#   setdiff(c("gbifid", "lastinterpreted", 
-#             "eventdate", "catalognumber", "dateidentified", 
-#             "occurrenceid"))
-# occ |> count()
-# occ |> distinct(across(all_of(cnames))) |> count()
-# x <- occ |> distinct(across(all_of(cnames))) |> collect() |> sample_n(100)
-# 
-# occ |> distinct(species, decimallatitude, decimallongitude, year, month, day,
-#                 place_name, stateprovince, coordinateuncertaintyinmeters,
-#                 basisofrecord, geom) |> count() # notice that institutioncode is out
 
 ```
 
@@ -152,27 +182,54 @@ fluidRow(
 ```{r}
 mar_occ <- reactive({
   
-  req(input$place, input$dup_choice)
+  req(input$place, input$dup_choice, input$obs_type)
+
   occ <- dcon |> 
     tbl("occurrences") |> 
     filter(place_name == input$place,
-           basisofrecord %in% c("HUMAN_OBSERVATION", "PRESERVED_SPECIMEN"))
+           basisofrecord %in% c("HUMAN_OBSERVATION", "PRESERVED_SPECIMEN")) |> 
+    mutate(gbif_record_link = paste0("https://www.gbif.org/occurrence/", gbifid))
   
   if(input$dup_choice == "yes"){
     
     occ <- occ |> 
-      distinct(species, decimallatitude, decimallongitude, year, month, day,
-                place_name, stateprovince, coordinateuncertaintyinmeters,
-                basisofrecord, geom) # notice that institutioncode is out
+      # Rebecca's recommended filter
+      distinct(verbatimscientificname, decimallatitude, decimallongitude, year, month, day, 
+               # collectorname, 
+               collectioncode, 
+               institutioncode, .keep_all = T)
+      # distinct(species, decimallatitude, decimallongitude, year, month, day,
+      #           place_name, stateprovince, coordinateuncertaintyinmeters,
+      #           basisofrecord, geom, .keep_all = T) # notice that institutioncode is out
+    
   }
   
+  # print(input$obs_type)
   if(input$obs_type != "All"){
+    chosen_obs_type <- input$obs_type
     occ <- occ |> 
-      filter(basisofrecord == input$obs_type)
+      filter(basisofrecord == chosen_obs_type)
   }
   
-  occ
+  # Apply the filter for uncertainty if it is not "All"
+  if (input$uncert_filter == "No Filter") {
+    # Do nothing, no further filtering
+  } else if (input$uncert_filter == "Less than 500m") {
+    occ <- occ |>
+      filter(coordinateuncertaintyinmeters <= 500 | is.na(coordinateuncertaintyinmeters))
+  } else if (input$uncert_filter == "Less than 1000m") {
+    occ <- occ |>
+      filter(coordinateuncertaintyinmeters <= 1000 | is.na(coordinateuncertaintyinmeters))
+  } else if (input$uncert_filter == "Less than 25km") {
+    occ <- occ |>
+      filter(coordinateuncertaintyinmeters <= 25000 | is.na(coordinateuncertaintyinmeters))
+  }
+  
+  # print(occ)
+  
+  return(occ)
 })
+
   
 
 herb_n_inat_count <- reactive({
@@ -242,7 +299,7 @@ count_rast <- rast_occ |> rast(crs = "epsg:4326")
 
 boundary <- dcon |> 
   tbl("places") |> 
-  filter(name == input$place) |> 
+  filter(name == input$place) |>
   collect() |> 
   st_as_sf(wkt = "geom")
 
@@ -326,8 +383,132 @@ downloadButton("download_spec", "Download species lists"))
 
 ```
 
+# Taxon name changes
+I did some `regex` magic to try and help identify which species names were changed to conform to the GBIF backbone taxonomy. 
+I essentially did this by gluing the columns `species` and `infraspecificepithet` together into `modified_gbif_backbone`, and then comparing this to the `verbatimscientificname` with the author names removed (now called `modified_verbatim_name`).
+Then I filtered for all rows where `modified_verbatim_name` and `verbatimscientificname` did not match.
+I included the constituent columns to the right so you can see what the original taxon information was.
+
+It's not perfect but it might be helpful. You can download the table below.
+
+At a rough approximation in this filtered dataset, **`r renderText(verbatim_change_taxon_count())`** verbatim taxon names were standardized to **`r renderText(gbif_change_taxon_count())`** gbif backbon taxon names.
+```{r}
+
+fluidRow(
+  radioGroupButtons(
+     inputId = "namechange_choice",
+     # label ="Remove duplicate records?",
+     choices = c("Binomial", "Trinomial"),
+     selected = "Binomial"
+     # justified = TRUE
+     )
+)
+
+# Species table
+namechange_table <- reactive({
+  req(mar_occ())
+  
+  if(input$namechange_choice == "Trinomial"){
+    mar_occ() |> 
+      mutate(modified_gbif_backbone = paste(species, infraspecificepithet),
+         modified_verbatim_name = verbatimscientificname |> 
+           # Get rid of the modifiers
+           str_replace_all("\\s*(subsp\\.|var\\.|\\sex\\s|\\sx\\s|&|\\s×\\s|\\sbis\\s|\\svar\\s|\\sf\\.\\s)\\s*", " ") |> # need to work on this a little more
+           # Remove everything in parantheses
+           str_replace_all("\\s*\\([^)]*\\)", "") |>
+           # Get rid of words (names) that are capitalized after the first one
+           str_replace_all(" [A-Z][^ ]*", "") |>
+           str_squish()
+         ) |> 
+  filter(modified_gbif_backbone != modified_verbatim_name) |> 
+  select(
+    modified_gbif_backbone,
+         modified_verbatim_name,
+    species,
+         infraspecificepithet, 
+    # scientificname,
+            verbatimscientificname
+         ) |> 
+  distinct(modified_gbif_backbone, modified_verbatim_name, .keep_all = T) |> 
+        arrange(modified_gbif_backbone) |> 
+  collect()
+    
+  } else if (input$namechange_choice == "Binomial") {
+    
+    mar_occ() |> 
+      select(species, verbatimscientificname) |> 
+  distinct() |> 
+  collect() |> 
+  # This takes care of taxa with ' × ' between genus and species
+  mutate(verbatim_as_binomial = str_replace_all(verbatimscientificname, 
+                                                "\\s+\\w\\s+", " ")) |> 
+    mutate(verbatim_as_binomial = str_extract(verbatimscientificname, "^\\w+\\s+\\w+(?:-\\w+)?")) |> 
+  rename(gbif_binomial = species) |> 
+  filter(gbif_binomial != verbatim_as_binomial) |> 
+  select(
+    gbif_binomial,
+         verbatim_as_binomial,
+    verbatimscientificname
+         ) |> 
+  distinct(gbif_binomial, verbatim_as_binomial, .keep_all = T) |> 
+        arrange(gbif_binomial)
+  }
+})
+
+# Get number of taxa that changed names
+gbif_change_taxon_count <- reactive({
+  if(input$namechange_choice == "Trinomial"){
+    namechange_table() |> distinct(modified_gbif_backbone) |> nrow()
+  } else if (input$namechange_choice == "Binomial") {
+    namechange_table() |> distinct(gbif_binomial) |> nrow()
+  }
+})
+
+verbatim_change_taxon_count <- reactive({
+    if(input$namechange_choice == "Trinomial"){
+    namechange_table() |> distinct(modified_verbatim_name) |> nrow()
+  } else if (input$namechange_choice == "Binomial") {
+    namechange_table() |> distinct(verbatim_as_binomial) |> nrow()
+  }
+})
+
+output$species_table <- renderDT({
+    
+    datatable(namechange_table(), 
+              options = list(scrollY = "300px", paging = FALSE))  # Scrollable table
+  })
+
+DTOutput("species_table") 
+
+fluidRow(downloadButton("download_namechange", "Download name change table (csv)"))
+
+# Now for download
+output$download_namechange <- downloadHandler(
+    filename = function() {
+      paste0(input$place, "_namechange", ".csv")
+    },
+    content = function(file) {
+      # Write the tibble to CSV format
+
+      write_csv(namechange_table(), 
+                file)
+    }
+  )
+```
+
 ---
-Note: The column 'basisofrecord' is the GBIF column that indicates how the data were collected.
+##### Notes
+The column 'basisofrecord' is the GBIF column that indicates how the data were collected.
 There are two values here, HUMAN_OBSERVATION and PRESERVED_SPECIMEN.
 These practically correspond to iNaturalist and herbaria, respectively.
 
+These are the filters I used to pre-filter the data (in SQL):
+```sql
+SELECT *
+  FROM gbif
+  WHERE phylum = 'Tracheophyta'
+  AND species IS NOT NULL
+  AND NOT species = ''
+  AND stateprovince = 'California'
+```
+- These data were downloaded from GBIF on August 20th, 2024
