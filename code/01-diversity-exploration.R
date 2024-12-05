@@ -152,3 +152,39 @@ sheet_write(unique_species_df,
   ss = "https://docs.google.com/spreadsheets/d/1sT8iHPiXsnQu9-EpbDRwTJXHaYyK-lNDI8pbCn6twgI/edit?gid=0#gid=0",
   sheet = "Sheet1"
 )
+
+
+# Checking collector name ---------------------------------------
+tam_occ |>
+  # filter(basisofrecord == "HUMAN_OBSERVATION") |>
+  filter(basisofrecord == "PRESERVED_SPECIMEN") |>
+  mutate(recordedby = unlist(recordedby)) |>
+  group_by(recordedby) |>
+  summarize(N = n()) |>
+  arrange(desc(N)) |>
+  View()
+
+tam_occ |>
+  # filter(basisofrecord == "HUMAN_OBSERVATION") |>
+  filter(basisofrecord == "PRESERVED_SPECIMEN") |>
+  mutate(
+    recordedby =
+      case_when(
+        length(unlist(recordedby)) > 1 ~ # if there are more than 2 collectors
+          recordedby |> paste(collapse = ","), # collapse them into comma separated
+        T ~ recordedby
+      )
+  )
+
+tam_occ |>
+  filter(length(unlist(recordedby)) > 2) |>
+  select(recordedby)
+
+tam_occ |>
+  mutate(recordedby = as.character(recordedby)) |>
+  select(recordedby)
+tam_occ |>
+  head(10) |>
+  pull(recordedby) |>
+  unlist() |>
+  length()

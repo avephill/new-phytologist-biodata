@@ -112,6 +112,7 @@ fluidRow(
 
 ```{r}
 fluidRow(
+  "Note: udpated 2024-11-25, fixed duplicates and recordedby column",
   h1(renderText(input$place)),
   wellPanel(
     h5("Remove duplicate records?"),
@@ -188,16 +189,20 @@ mar_occ <- reactive({
     tbl("occurrences") |> 
     filter(place_name == input$place,
            basisofrecord %in% c("HUMAN_OBSERVATION", "PRESERVED_SPECIMEN")) |> 
-    mutate(gbif_record_link = paste0("https://www.gbif.org/occurrence/", gbifid))
+    mutate(gbif_record_link = paste0("https://www.gbif.org/occurrence/", gbifid),
+    recordedby = as.character(recordedby))
   
   if(input$dup_choice == "yes"){
     
     occ <- occ |> 
-      # Rebecca's recommended filter
-      distinct(verbatimscientificname, decimallatitude, decimallongitude, year, month, day, 
-               # collectorname, 
-               collectioncode, 
-               institutioncode, .keep_all = T)
+      # distinct(verbatimscientificname, 
+      # decimallatitude, decimallongitude, 
+      # year, month, day, 
+      #          collectioncode, 
+      #          institutioncode, .keep_all = T)
+distinct( 
+      decimallatitude, decimallongitude, basisofrecord,
+      year, month, day, species, recordedby, .keep_all = T)
       # distinct(species, decimallatitude, decimallongitude, year, month, day,
       #           place_name, stateprovince, coordinateuncertaintyinmeters,
       #           basisofrecord, geom, .keep_all = T) # notice that institutioncode is out
