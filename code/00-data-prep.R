@@ -22,36 +22,48 @@ FROM read_parquet('~/Data/Occurrences/GBIF/occurrence.parquet/*', hive_partition
 # Read in boundaries and organize -----------------------------------------
 
 # Santa Monica Mtns
-santamonica <- st_read("KML_place_boundaries/KML Boundaries/santa-monica-mountains-ecological-management-area.kml") |> 
-  st_transform(4326) |> 
-  select(Name, geom = geometry) |> 
+santamonica <- st_read("data/KML_place_boundaries/KML Boundaries/santa-monica-mountains-ecological-management-area.kml") |>
+  st_transform(4326) |>
+  select(Name, geom = geometry) |>
   mutate(Name = "Santa Monica Mountains")
 
 # OneTam
-onetam1 <- st_read("KML_place_boundaries/KML Boundaries/marin-municipal-water-district-watershed.kml") |> 
-  st_transform(4326) |> 
+onetam1 <- st_read("data/KML_place_boundaries/KML Boundaries/marin-municipal-water-district-watershed.kml") |>
+  st_transform(4326) |>
   select(Name, geom = geometry)
-onetam2 <- st_read("KML_place_boundaries/KML Boundaries/mount-tamalpais-state-park.kml") |> st_transform(4326) |> 
+onetam2 <- st_read("data/KML_place_boundaries/KML Boundaries/mount-tamalpais-state-park.kml") |>
+  st_transform(4326) |>
   select(Name, geom = geometry)
-onetam3 <- st_read("KML_place_boundaries/KML Boundaries/Muir Woods.kml") |> 
-  st_transform(4326) |> 
-  select(Name, geom = geometry) |> 
+onetam3 <- st_read("data/KML_place_boundaries/KML Boundaries/Muir Woods.kml") |>
+  st_transform(4326) |>
+  select(Name, geom = geometry) |>
   mutate(Name = "Muir Woods")
 
-onetam <- bind_rows(onetam1, onetam2, onetam3) |> 
-  summarise(geom = st_union(geom |> st_buffer(100)), 
-            Name = "One Tam")
+onetam_prep <- bind_rows(onetam1, onetam2, onetam3) |>
+  summarise(
+    geom = st_union(geom |> st_buffer(100)),
+    Name = "One Tam"
+  )
+
+# Remove the little Tam piece
+onetam <- onetam_prep |>
+  st_cast("POLYGON") |>
+  st_make_valid() %>%
+  mutate(area = st_area(.)) |>
+  slice_max(area, n = 2) |>
+  group_by(Name) |>
+  summarise(geom = st_union(geom))
 
 # plot(onetam |> st_geometry())
 
 # Marble Mtn
-marble <- st_read("KML_place_boundaries/KML Boundaries/marble-salmon-mountains-trinity-alps-us.kml") |> 
-  st_transform(4326) |> 
-  select(Name, geom = geometry) |> 
+marble <- st_read("data/KML_place_boundaries/KML Boundaries/marble-salmon-mountains-trinity-alps-us.kml") |>
+  st_transform(4326) |>
+  select(Name, geom = geometry) |>
   mutate(Name = "Marble/Salmon Mountains")
 
 ## Combine them ##
-all_places <- bind_rows(santamonica, onetam, marble) |> 
+all_places <- bind_rows(santamonica, onetam, marble) |>
   rename(name = Name)
 
 
@@ -60,10 +72,10 @@ all_places <- bind_rows(santamonica, onetam, marble) |>
 # st_write_parquet(all_places, "place_boundaries.parquet")
 
 # New way just using WKT
-all_places |> 
+all_places |>
   tibble() |>
-  mutate(geom = st_as_text(geom)) |> 
-  write_parquet("place_boundaries.parquet")
+  mutate(geom = st_as_text(geom)) |>
+  write_parquet("~/Projects/new-phytologist/data/place_boundaries.parquet")
 
 
 
@@ -75,10 +87,12 @@ all_places |>
 con |> dbExecute("
 DROP VIEW IF EXISTS places;
 CREATE VIEW places AS
-SELECT * EXCLUDE geom, ST_GeomFromWKB(geom) as geom
-FROM PARQUET_SCAN('~/Projects/new-phytologist/shiny-aoi-exploration/place_boundaries.parquet');")
+SELECT * EXCLUDE geom, ST_GeomFromText(geom) as geom
+FROM PARQUET_SCAN('~/Projects/new-phytologist/data/place_boundaries.parquet');")
 
-con |> tbl("places") |> colnames()
+con |>
+  tbl("places") |>
+  colnames()
 con |> dbExecute("SET memory_limit = '200GB';")
 
 
@@ -100,7 +114,7 @@ COPY (
   AND NOT species = '')
   TO '%s' (FORMAT PARQUET);
   ",
-    "~/Projects/new-phytologist/shiny-aoi-exploration/occurrences.parquet"
+    "~/Projects/new-phytologist/data/occurrences.parquet"
   )
 )
 toc()
@@ -112,11 +126,11 @@ con |> dbExecute("
 DROP VIEW IF EXISTS target;
 CREATE VIEW target AS
 SELECT * EXCLUDE geom, ST_Point(decimallongitude, decimallatitude) AS geom
-FROM read_parquet('~/Projects/new-phytologist/shiny-aoi-exploration/occurrences.parquet');")
+FROM read_parquet('~/Projects/new-phytologist/data/occurrences.parquet');")
 
-con |> tbl("target") |> count()
+con |>
+  tbl("target") |>
+  count()
 
 
 con |> dbDisconnect(shutdown = T)
-
-

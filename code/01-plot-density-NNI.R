@@ -23,21 +23,21 @@ CREATE OR REPLACE VIEW places AS
 SELECT * -- EXCLUDE geom, ST_Point(decimallongitude, decimallatitude) AS geom
 FROM read_parquet('~/Projects/new-phytologist/shiny-aoi-exploration/place_boundaries.parquet');")
 
-places_prep <- con |>
+places <- con |>
   tbl("places") |>
   collect() |>
   st_as_sf(wkt = "geom", crs = 4326)
 
-# fix one tam
-places <- places_prep |>
-  filter(name != "One Tam") |>
-  bind_rows(places_prep |> filter(name == "One Tam") |>
-    st_cast("POLYGON") |>
-    st_make_valid() %>%
-    mutate(area = st_area(.)) |>
-    slice_max(area, n = 2) |>
-    group_by(name) |>
-    summarise(geom = st_union(geom)))
+# # fix one tam
+# places <- places_prep |>
+#   filter(name != "One Tam") |>
+#   bind_rows(places_prep |> filter(name == "One Tam") |>
+#     st_cast("POLYGON") |>
+#     st_make_valid() %>%
+#     mutate(area = st_area(.)) |>
+#     slice_max(area, n = 2) |>
+#     group_by(name) |>
+#     summarise(geom = st_union(geom)))
 
 places_box <- places |>
   group_by(name) |>
