@@ -17,12 +17,12 @@ con |> dbExecute("INSTALL spatial; LOAD spatial;")
 con |> dbExecute("
 CREATE OR REPLACE VIEW target AS
 SELECT * EXCLUDE geom, ST_Point(decimallongitude, decimallatitude) AS geom
-FROM read_parquet('~/Projects/new-phytologist/shiny-aoi-exploration/occurrences.parquet');")
+FROM read_parquet('~/Projects/new-phytologist/data/occurrences.parquet');")
 
 con |> dbExecute("
 CREATE OR REPLACE TABLE places AS
 SELECT * EXCLUDE geom, ST_GeomFromTEXT(geom) AS geom
-FROM read_parquet('~/Projects/new-phytologist/shiny-aoi-exploration/place_boundaries.parquet');
+FROM read_parquet('~/Projects/new-phytologist/data/place_boundaries.parquet');
 
 CREATE INDEX places_idx ON places USING RTREE (geom);")
 

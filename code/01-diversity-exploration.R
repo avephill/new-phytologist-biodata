@@ -16,7 +16,7 @@ con |> dbExecute("INSTALL spatial; LOAD spatial;")
 con |> dbExecute("
 CREATE OR REPLACE VIEW target AS
 SELECT * EXCLUDE geom, ST_Point(decimallongitude, decimallatitude) AS geom
-FROM read_parquet('~/Projects/new-phytologist/shiny-aoi-exploration/occurrences.parquet');")
+FROM read_parquet('~/Projects/new-phytologist/data/occurrences.parquet');")
 
 tam_occ <- con |>
   tbl("target") |>
