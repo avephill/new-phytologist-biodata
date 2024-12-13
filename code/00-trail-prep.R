@@ -14,7 +14,7 @@ FROM read_parquet('~/Data/Environment/OpenStreetMap/files/california.pbf_nofilte
 con |> dbExecute("
 CREATE OR REPLACE VIEW places AS
 SELECT * EXCLUDE geom, ST_GeomFromTEXT(geom) AS geom
-FROM read_parquet('~/Projects/new-phytologist/shiny-aoi-exploration/place_boundaries.parquet');")
+FROM read_parquet('~/Projects/new-phytologist/data/place_boundaries.parquet');")
 
 con |> tbl("osm")
 
@@ -51,11 +51,39 @@ COPY (
     ON ST_INTERSECTS(places.geom, osm.geometry)
     WHERE 'highway' IN map_keys(tags)
     AND ST_GeometryType(osm.geometry) != 'POINT'
-) TO 'data/place_roads.gpkg' (FORMAT 'GDAL', DRIVER 'GPKG', SRS 'EPSG:4326');
+) TO 'data/place_roads_prep.gpkg' (FORMAT 'GDAL', DRIVER 'GPKG', SRS 'EPSG:4326');
 ")
-getwd()
+
+# Now filter specific highway types (didn't figure out how to do it in duckdb)
+library(sf)
+library(jsonlite)
+library(tidyverse)
+highways <- st_read("data/place_roads_prep.gpkg") |>
+  mutate(tags = lapply(tags_json, fromJSON)) |>
+  mutate(
+    highway = map_chr(tags, "highway") # ,
+    # surface = map_chr(tags, "surface")
+  )
+roadtypes <- c(
+  "motorway",
+  "trunk",
+  "primary", "secondary",
+  "tertiary",
+  "residential"
+)
+
+target_highways <- highways |>
+  filter(highway %in% roadtypes) |>
+  select(-tags)
+
+target_highways |> select(where(is.list))
+
+write_sf(target_highways, "data/place_roads.gpkg")
 
 x <- st_read("data/place_roads.gpkg")
 library(sf)
 plot(x |> filter(name == "One Tam") |> st_geometry())
 View(x)
+
+# All trail keys
+# https://wiki.openstreetmap.org/wiki/Key:highway
