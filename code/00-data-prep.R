@@ -120,6 +120,22 @@ COPY (
 toc()
 # this took 358 sec
 
+# # Write to gpkg too
+# con <- dbConnect(duckdb())
+# con |> dbExecute("INSTALL spatial; LOAD spatial;")
+
+# con |> dbExecute("CREATE TABLE occ AS
+# SELECT *  EXCLUDE geom, ST_Point(decimallongitude, decimallatitude) AS geom
+# FROM read_parquet('~/Projects/new-phytologist/data/occurrences.parquet');")
+# con |> dbGetQuery("DESCRIBE occ")
+# con |> dbExecute("
+# COPY
+# (SELECT * FROM occ)
+# TO 'data/occurrences.gpkg' (FORMAT 'GDAL', DRIVER 'GPKG', SRS 'EPSG:4326');")
+
+# con |> dbGetQuery("SELECT * EXCLUDE geom, ST_Point(decimallongitude, decimallatitude) AS geom
+# FROM read_parquet('~/Projects/new-phytologist/data/occurrences.parquet') LIMIT 5")
+
 # Read it back in
 # Can't use the native geometry for some reason, but just recreate it with lonlat
 con |> dbExecute("
