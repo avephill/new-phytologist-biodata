@@ -79,7 +79,7 @@ places_box <- places |>
 
 statemap <- ggplot() +
   annotation_map_tile("cartolight", zoom = 7) + # add basemap layer
-  geom_sf(data = places_box, fill = NA, linewidth = 3, color = "red") +
+  geom_sf(data = places_box, fill = NA, linewidth = 1, color = "black") +
   coord_sf(xlim = c(-124.48, -114.13), ylim = c(32.53, 42.01), crs = 4326) +
   annotation_scale(
     location = "bl",
@@ -150,14 +150,18 @@ place_alt <- places |>
   group_split(name) %>% # Split by the 'name' column
   map_dfr(~ {
     # Process each group (now a data frame) individually
+    # browser()
+    alt_values <- extract(alt, .x) |> pull(CANV)
     .x %>%
       mutate(
-        alt_min = min(extract(alt, .), na.rm = TRUE),
-        alt_max = max(extract(alt, .), na.rm = TRUE)
+        alt_min = min(alt_values, na.rm = TRUE),
+        alt_max = max(alt_values, na.rm = TRUE),
+        alt_median = median(alt_values, na.rm = T)
       )
   }) %>%
   as_tibble() |>
   select(-geom)
+
 
 # Get total study area area
 study_areakm2 <- place_eco |>
@@ -224,7 +228,7 @@ facet_plots <- peco_w_area |>
         # legend.title = element_text(angle = 90, size = 9),
         legend.title = element_text(size = 9),
         legend.text = element_text(size = 7),
-        panel.border = element_rect(color = "red", linewidth = 4, fill = NA),
+        panel.border = element_rect(color = "black", linewidth = 2, fill = NA),
         panel.background = element_rect(fill = "white", color = NA)
       ) +
       labs(fill = "Level 3 Ecoregion") #+
@@ -254,7 +258,7 @@ combined_plot <-
     guides = "collect",
     heights = c(6, 4, 1.75, .2, 2)
   )
-combined_plot
+# combined_plot
 
 sm_img <- ggdraw() + draw_image("results/santa_monica.jpg")
 mm_img <- ggdraw() + draw_image("results/marble_mts.jpg")
@@ -281,7 +285,9 @@ ann_text <- peco_w_area |>
     paste0(
       paste("Area:", unique(.x$place_areakm2) |> round(0), "km²"),
       "\n",
-      sprintf("Elev. range: [%s, %s]m", .x$alt_min, .x$alt_max)
+      sprintf("Elev. range: %sm - %sm", .x$alt_min, .x$alt_max),
+      "\n",
+      sprintf("Elev. median: %sm", .x$alt_median)
     )
   })
 
