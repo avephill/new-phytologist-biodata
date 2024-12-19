@@ -3,6 +3,7 @@ library(duckdb)
 library(glue)
 library(tictoc)
 library(duckdbfs)
+library(sf)
 
 # All trail keys
 # https://wiki.openstreetmap.org/wiki/Key:highway
@@ -73,41 +74,77 @@ con |> dbExecute(
 )
 
 
-# Make figure ---------------------------------------
-library(jsonlite)
-nearest_trail <- read_csv("data/occ_nearest_trail.csv")
+# Add random points ---------------------------------------
+con |> dbExecute("
+CREATE OR REPLACE VIEW places AS
+SELECT * -- EXCLUDE geom, ST_Point(decimallongitude, decimallatitude) AS geom
+FROM read_parquet('~/Projects/new-phytologist/data/place_boundaries.parquet');")
 
-nearest_trail |>
-  mutate(
-    place_name = case_when(
-      place_name == "Marble/Salmon Mountains" ~ "Marble Mountains",
-      place_name == "One Tam" ~ "Mt. Tamalpais",
-      T ~ place_name
-    ),
-    basisofrecord = case_when(
-      basisofrecord == "HUMAN_OBSERVATION" ~ "iNaturalist",
-      basisofrecord == "PRESERVED_SPECIMEN" ~ "Herbarium",
-      T ~ basisofrecord
-    )
-  ) |>
-  ggplot() +
-  geom_boxplot(aes(x = basisofrecord, y = distance)) +
-  facet_wrap(~place_name, scales = "free") +
-  labs(x = element_blank(), y = "Distance to nearest road (m)")
+places <- con |>
+  tbl("places") |>
+  collect() |>
+  st_as_sf(wkt = "geom", crs = 4326)
 
-nearest_trail |>
-  left_join(
-    con |> tbl("trails") |>
-      collect(),
-    by = c("nearest_trail_id" = "feature_id")
-  ) |>
-  mutate(tags = lapply(tags_json, fromJSON)) |>
-  mutate(highway = map_chr(tags, "highway")) |>
-  distinct(highway)
+# Generate random points for each site
+random_pts <- places |>
+  group_split(name) |>
+  map_df(function(place) {
+    # browser()
+    pts <- place |>
+      st_make_valid() |>
+      st_sample(size = 10000, type = "random") |>
+      st_as_sf() |>
+      mutate(
+        basisofrecord = "random",
+        place_name = place |> as_tibble() |> distinct(name) |> pull(1),
+        gbifid = NA
+      )
+
+    return(pts)
+  })
+
+random_pts |> write_sf("data/random_pts.gpkg")
+
+con |> dbExecute("
+CREATE OR REPLACE TABLE random AS
+SELECT *, ST_TRANSFORM(geom, 'EPSG:4326', 'EPSG:3310', always_xy := true) AS geom3310
+FROM st_read('data/random_pts.gpkg');
+
+CREATE INDEX idx_rand_geom3310 ON occ USING RTREE (geom3310);
+")
+
+nnrand_query <- glue("
+SELECT
+    gbifid,
+    place_name,
+    basisofrecord,
+    trails3.feature_id AS nearest_trail_id,
+    ST_Distance(random.geom3310, trails3.geom3310) AS distance
+FROM
+    random,
+    LATERAL (
+        SELECT
+            feature_id,
+            geom3310
+        FROM
+            trails
+        WHERE random.place_name = trails.name
+        ORDER BY
+            ST_Distance(random.geom3310, trails.geom3310)
+        LIMIT 1
+    ) AS trails3
+")
+
+con |> dbGetQuery(sprintf("EXPLAIN %s", nnrand_query))
+
+tic()
+con |> dbExecute(glue(sprintf("COPY (%s) TO 'data/rand_nearest_trail.csv';", nnrand_query)))
+toc()
+
+# COPY (SELECT * FROM nearest_trail) TO 'data/occ_nearest_trail.gpkg' (FORMAT 'GDAL', DRIVER 'GPKG', SRS 'EPSG:4326');
 
 
-
-
+# Testing ---------------------------------------
 
 chosen_pt <- con |>
   tbl("nearest_trail3") |>
