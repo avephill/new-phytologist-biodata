@@ -8,6 +8,7 @@ library(ggspatial)
 library(sf)
 library(spatstat)
 library(stars)
+library(googlesheets4)
 
 
 con <- dbConnect(duckdb())
@@ -28,35 +29,14 @@ places <- con |>
   collect() |>
   st_as_sf(wkt = "geom", crs = 4326)
 
-# # fix one tam
-# places <- places_prep |>
-#   filter(name != "One Tam") |>
-#   bind_rows(places_prep |> filter(name == "One Tam") |>
-#     st_cast("POLYGON") |>
-#     st_make_valid() %>%
-#     mutate(area = st_area(.)) |>
-#     slice_max(area, n = 2) |>
-#     group_by(name) |>
-#     summarise(geom = st_union(geom)))
 
 places_box <- places |>
   group_by(name) |>
   mutate(geom = geom |> st_bbox() |> st_as_sfc()) |>
   ungroup()
 
-# look at the tam one
-# mini_tam <- places_prep |>
-#   filter(name == "One Tam") |>
-#   st_cast("POLYGON") |>
-#   st_make_valid() %>%
-#   mutate(area = st_area(.)) |>
-#   slice_min(area, n = 1)
 
-# mini_tamocc <- full_occ |> st_intersection(mini_tam)
-# mini_tamocc |> distinct(species)
 
-# TODO
-# Add verified filter
 
 full_occ <- con |>
   tbl("target") |>
@@ -67,6 +47,131 @@ full_occ <- con |>
   ) |>
   to_sf(conn = con, crs = 4326)
 
+# Add verified filter
+gs4_auth()
+
+species_master <- read_sheet("https://docs.google.com/spreadsheets/d/19vRvSHKxrfHRVe0jgI3AncQyib1B1NBmDQ5-s3OKs5o/edit?gid=0#gid=0")
+verified_tam <- species_master |>
+  filter(verifiedStatus_TAM == "verified") |>
+  distinct(species) |>
+  pull(1)
+verified_mm <- species_master |>
+  filter(verifiedStatus_MM == "verified") |>
+  distinct(species) |>
+  pull(1)
+verified_sm <- species_master |>
+  filter(verifiedStatus_SMM == "verified") |>
+  distinct(species) |>
+  pull(1)
+
+verified_occ <- full_occ |>
+  filter(
+    (place_name == "One Tam" & species %in% verified_tam) |
+      (place_name == "Santa Monica Mountains" & species %in% verified_sm) |
+      (place_name == "Marble/Salmon Mountains" & species %in% verified_mm)
+  ) |>
+  distinct(place_name, order, species, recordedby, basisofrecord, decimallatitude, decimallongitude, day, month, year, .keep_all = T)
+
+verified_occ |> select(where(is.list))
+
+verified_occ |>
+  mutate(
+    recordedby = as.character(recordedby),
+    issue = as.character(issue),
+    identifiedby = as.character(identifiedby),
+    typestatus = as.character(typestatus),
+    mediatype = as.character(mediatype)
+  ) |>
+  # mutate(across(where(is.list), ~ map(., toString))) |>
+  # unnest(cols = where(is.list)) |>
+  write_sf("data/verified_occurrences.gpkg")
+
+
+
+
+
+# NNI Analysis ---------------------------------------
+library(tictoc)
+library(multidplyr)
+
+verified_occ <- st_read("data/verified_occurrences.gpkg")
+
+cluster <- new_cluster(2)
+
+tic()
+verified_nni <- verified_occ |>
+  # filter(place_name == "One Tam") |>
+  group_split(species, place_name, basisofrecord) %>%
+  map_dfr(~ {
+    browser()
+    if (nrow(.x) > 1) {
+      nni_results <- nni(.x, win = "extent")
+      .x |>
+        distinct(species, place_name, basisofrecord) |>
+        cbind(as_tibble(nni_results))
+    }
+  })
+toc()
+
+# With family?
+tic()
+verified_nni <- verified_occ |>
+  # filter(place_name == "One Tam") |>
+  group_split(family, place_name, basisofrecord) %>%
+  map_dfr(~ {
+    # browser()
+    if (nrow(.x) > 1) {
+      nni_results <- nni(.x, win = "extent")
+      .x |>
+        distinct(family, place_name, basisofrecord) |>
+        cbind(as_tibble(nni_results))
+    }
+  })
+toc()
+
+complete_nni <- verified_nni |>
+  filter(is.finite(NNI)) |>
+  as_tibble() |>
+  filter(p < .05)
+
+nni_ttest <- complete_nni |>
+  mutate(NNI_log = log(NNI)) |>
+  filter(is.finite(NNI_log)) |>
+  group_split(place_name) |>
+  map_dfr(~ {
+    nni_inat <- .x |>
+      filter(basisofrecord == "HUMAN_OBSERVATION") |>
+      pull(NNI_log)
+    nni_herb <- .x |>
+      filter(basisofrecord == "PRESERVED_SPECIMEN") |>
+      pull(NNI_log)
+
+    # browser()
+
+    t_result <- t.test(nni_inat, nni_herb)
+
+    .x |>
+      distinct(place_name) |>
+      cbind(as_tibble(t_result[["p.value"]])) |>
+      rename(p_value = value)
+  })
+
+nni_figuredf <- complete_nni |>
+  left_join(nni_ttest)
+
+nni_figuredf |> write_csv("results/nni_results.csv")
+
+
+# t.test(log(NNI$NNI.h[which(NNI$p.h < 0.05 & NNI$p.o < 0.05)]), log(NNI$NNI.o[which(NNI$p.h < 0.05 & NNI$p.o < 0.05)])) # test for a difference bewteen herbarium and inat
+
+
+
+
+
+
+
+# PDF Density Analysis ---------------------------------------
+# This is scrap for now, unless we go back to it
 
 densityMaker <- function(input_occ, place_name) {
   place_owin <- places |>
@@ -107,35 +212,6 @@ fullDensCompiler <- function(full_occ, place_name) {
 
 full_dens <- map(places |> pull(name), function(x) fullDensCompiler(full_occ, x)) |> bind_rows()
 
-# For recentering
-# For recentering
-# recenter_point <- st_sfc(st_point(c(-120, 30)), crs = st_crs(place_eco))
-# recenter_vector <- place_eco |>
-#   # rowwise() %>%
-#   group_by(name) |>
-#   mutate(offset_geom = (recenter_point - st_centroid(st_union(geom)))) |>
-#   ungroup() |>
-#   as_tibble() |>
-#   select(name, offset_geom)
-
-# peco_recent <- place_eco |>
-#   select(-c(eco_wkt, places_wkt)) |>
-#   left_join(recenter_vector, by = "name") |>
-#   # rowwise() |>
-#   mutate(recenter_geom = geom + offset_geom) |>
-#   st_set_geometry("recenter_geom") |>
-#   st_set_crs(4326)
-
-
-recenter_point <- st_sfc(st_point(c(-120, 30)), crs = 4326) |> st_transform(3310)
-recenter_vector <- places |>
-  st_transform(3310) |>
-  group_by(name) %>%
-  mutate(offset_geom = (recenter_point - st_centroid(st_union(geom)))) |>
-  ungroup() |>
-  as_tibble() |>
-  select(place_name = name, offset_geom)
-
 
 full_dens_long <- full_dens |>
   mutate(diff_vals = herb_vals - inat_vals) |>
@@ -147,28 +223,7 @@ full_dens_long <- full_dens |>
   mutate(
     sqrt_value = sqrt(value),
     value_km2 = value * 1e6
-  ) #|>
-# For recentering
-# left_join(recenter_vector, by = "place_name") %>%
-# mutate(recenter_geom = geometry + offset_geom) |>
-# st_set_geometry("recenter_geom") |>
-# st_set_crs(3310) |>
-# select(-c(geometry, geom_text, offset_geom))
-
-# full_dens_long2 <- full_dens |>
-#   mutate(diff_vals = herb_vals - inat_vals) |>
-#   pivot_longer(
-#     cols = c(sum_vals, inat_vals, herb_vals, diff_vals),
-#     names_to = "variable",
-#     values_to = "value"
-#   ) |>
-#   mutate(sqrt_value = sqrt(value)) |>
-#   left_join(recenter_vector) %>%
-#   # rowwise() |>
-#   mutate(recenter_geom = geometry + recenter_geom)
-
-
-# joinem |> filter((inat_vals + herb_vals) != sum_vals)
+  )
 
 
 
@@ -312,47 +367,3 @@ x <- plot_grid(
 
 
 ggsave("results/density_plots.png", x, width = 12, height = 10)
-
-# tam <- places |>
-#   filter(name == "One Tam") |>
-#   st_make_valid()
-
-# tam_grid <- tam |>
-#   st_make_grid(n = c(20, 20)) |>
-#   st_intersection(tam) |>
-#   st_as_sf() %>%
-#   mutate(grid_id = 1:n()) |>
-#   st_make_valid() |>
-#   st_join(tam_occ |> mutate(present = 1)) %>%
-#   group_by(grid_id) %>%
-#   summarize(`Obs. count` = sum(present))
-
-# tam_plot <- ggplot() +
-#   geom_sf(data = tam_grid, aes(fill = `Obs. count`)) +
-#   theme_void() +
-#   theme(
-#     panel.border = element_rect(color = "red", linewidth = 4, fill = NA), # Red border
-#     legend.position = "top"
-#   )
-
-ggdraw(statemap) +
-  draw_plot(
-    {
-      tam_plot
-    },
-    # The distance along a (0,1) x-axis to draw the left edge of the plot
-    x = 0.52,
-    # The distance along a (0,1) y-axis to draw the bottom edge of the plot
-    y = .3,
-    # The width and height of the plot expressed as proportion of the entire ggdraw object
-    width = 0.46,
-    height = 0.46
-  )
-
-
-
-# # Trails ---------------------------------------
-# install.packages("osmdata")
-# library(osmdata)
-
-# x <- st_read("~/Data/Transportation/NPS_-_Trails_-_Geographic_Coordinate_System/Public_Trails_dd_nad.shp")
