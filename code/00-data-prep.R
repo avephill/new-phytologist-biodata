@@ -3,6 +3,7 @@ library(dplyr)
 library(duckdbfs)
 library(tictoc)
 library(sf)
+library(googlesheets4)
 # library(sfarrow)
 library(arrow)
 
@@ -148,5 +149,113 @@ con |>
   tbl("target") |>
   count()
 
+con |>
+  tbl("target") |>
+  colnames()
 
 con |> dbDisconnect(shutdown = T)
+
+
+
+# Join verified taxon ---------------------------------------
+# Join all the curated data from the other collaborators' work on taxa
+
+con <- dbConnect(duckdb())
+con |> dbExecute("INSTALL spatial; LOAD spatial;")
+
+con |> dbExecute("
+CREATE OR REPLACE VIEW target AS
+SELECT * EXCLUDE geom, ST_Point(decimallongitude, decimallatitude) AS geom
+FROM read_parquet('~/Projects/new-phytologist/data/occurrences_2024-11-25.parquet');")
+
+con |> dbExecute("
+CREATE OR REPLACE VIEW places AS
+SELECT * -- EXCLUDE geom, ST_Point(decimallongitude, decimallatitude) AS geom
+FROM read_parquet('~/Projects/new-phytologist/data/place_boundaries.parquet');")
+
+
+full_occ_prep <- con |>
+  tbl("target") |>
+  filter(
+    basisofrecord %in% c("HUMAN_OBSERVATION", "PRESERVED_SPECIMEN")
+  ) |>
+  to_sf(conn = con, crs = 4326)
+
+full_occ <- full_occ_prep |>
+  mutate(across(
+    where(is.list) & !matches("geom"),
+    ~ map_chr(., ~ paste(.x, collapse = "; "))
+  ))
+
+## Verified ------------------------------------------------------------
+gs4_auth(email = "ahill@calacademy.org")
+species_master <- read_sheet("https://docs.google.com/spreadsheets/d/19vRvSHKxrfHRVe0jgI3AncQyib1B1NBmDQ5-s3OKs5o/edit?gid=0#gid=0")
+verified_tam <- species_master |>
+  filter(verifiedStatus_TAM == "verified") |>
+  distinct(species) |>
+  pull(1)
+verified_mm <- species_master |>
+  filter(verifiedStatus_MM == "verified") |>
+  distinct(species) |>
+  pull(1)
+verified_sm <- species_master |>
+  filter(verifiedStatus_SMM == "verified") |>
+  distinct(species) |>
+  pull(1)
+
+verified_occ <- full_occ |>
+  filter(
+    (place_name == "One Tam" & species %in% verified_tam) |
+      (place_name == "Santa Monica Mountains" & species %in% verified_sm) |
+      (place_name == "Marble/Salmon Mountains" & species %in% verified_mm)
+  ) |>
+  mutate(verifiedTaxon = "verified")
+
+verified_dedup_occ <- verified_occ |>
+  distinct(place_name, order, species, recordedby, basisofrecord,
+    decimallatitude, decimallongitude, day, month, year,
+    .keep_all = T
+  )
+
+verified_occ |> write_sf(sprintf(
+  "data/verified_occurrences_%s.gpkg",
+  format(Sys.Date(), "%Y-%m-%d")
+))
+
+verified_dedup_occ |>
+  write_sf(sprintf(
+    "data/verified_occurrences_dedup_%s.gpkg",
+    format(Sys.Date(), "%Y-%m-%d")
+  ))
+
+## Unverified ------------------------------------------------------------
+unverified_tam <- species_master |>
+  filter(verifiedStatus_TAM == "not verified") |>
+  distinct(species) |>
+  pull(1)
+unverified_mm <- species_master |>
+  filter(verifiedStatus_MM == "not verified") |>
+  distinct(species) |>
+  pull(1)
+unverified_sm <- species_master |>
+  filter(verifiedStatus_SMM == "not verified") |>
+  distinct(species) |>
+  pull(1)
+
+unverified_occ <- full_occ |>
+  filter(
+    (place_name == "One Tam" & species %in% unverified_tam) |
+      (place_name == "Santa Monica Mountains" & species %in% unverified_sm) |
+      (place_name == "Marble/Salmon Mountains" & species %in% unverified_mm)
+  ) |>
+  mutate(verifiedTaxon = "not verified")
+
+unverified_occ |>
+  write_sf(sprintf(
+    "data/unverified_occurrences_%s.gpkg",
+    format(Sys.Date(), "%Y-%m-%d")
+  ))
+
+
+verified_occ |>
+  count(basisofrecord)

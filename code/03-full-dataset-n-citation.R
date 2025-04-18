@@ -4,100 +4,26 @@
 
 library(tidyverse)
 library(googlesheets4)
+library(duckdb)
+library(sf)
+library(arrow)
+library(googlesheets4)
 
 
-# verified_occ <- st_read("data/verified_occurrences.gpkg")
 
-# Pre-filter occ
-con <- dbConnect(duckdb())
-con |> dbExecute("INSTALL spatial; LOAD spatial;")
-
-con |> dbExecute("CREATE TABLE targ AS
-SELECT *  EXCLUDE geom, ST_Point(decimallongitude, decimallatitude) AS geom
-FROM read_parquet('~/Projects/new-phytologist/data/occurrences.parquet');")
-
-full_occ <- con |>
-  tbl("targ") |>
-  filter(
-    # species %in% verified_tam$species,
-    # place_name == "One Tam",
-    basisofrecord %in% c("HUMAN_OBSERVATION", "PRESERVED_SPECIMEN")
-  ) |>
-  to_sf(conn = con, crs = 4326)
-
-# Add verified filter
-gs4_auth()
-
-species_master <- read_sheet("https://docs.google.com/spreadsheets/d/19vRvSHKxrfHRVe0jgI3AncQyib1B1NBmDQ5-s3OKs5o/edit?gid=0#gid=0")
-
-# Verified
-verified_tam <- species_master |>
-  filter(verifiedStatus_TAM == "verified") |>
-  distinct(species) |>
-  pull(1)
-verified_mm <- species_master |>
-  filter(verifiedStatus_MM == "verified") |>
-  distinct(species) |>
-  pull(1)
-verified_sm <- species_master |>
-  filter(verifiedStatus_SMM == "verified") |>
-  distinct(species) |>
-  pull(1)
-
-verified_occ <- full_occ |>
-  filter(
-    (place_name == "One Tam" & species %in% verified_tam) |
-      (place_name == "Santa Monica Mountains" & species %in% verified_sm) |
-      (place_name == "Marble/Salmon Mountains" & species %in% verified_mm)
-  ) |> 
-  mutate(verifiedTaxon = "verified")
-
-verified_dedup_occ <- verified_occ |>
-  distinct(place_name, order, species, recordedby, basisofrecord, decimallatitude, decimallongitude, day, month, year, .keep_all = T)
-
-verified_dedup_occ |> select(where(is.list)
-
-verified_dedup_occ |>
-  mutate(
-    recordedby = as.character(recordedby),
-    issue = as.character(issue),
-    identifiedby = as.character(identifiedby),
-    typestatus = as.character(typestatus),
-    mediatype = as.character(mediatype)
-  ) |>
-  # mutate(across(where(is.list), ~ map(., toString))) |>
-  # unnest(cols = where(is.list)) |>
-  write_sf("data/verified_occurrences.gpkg")
-
-# Unverified
-unverified_tam <- species_master |>
-  filter(verifiedStatus_TAM == "not verified") |>
-  distinct(species) |>
-  pull(1)
-unverified_mm <- species_master |>
-  filter(verifiedStatus_MM == "not verified") |>
-  distinct(species) |>
-  pull(1)
-unverified_sm <- species_master |>
-  filter(verifiedStatus_SMM == "not verified") |>
-  distinct(species) |>
-  pull(1)
-
-unverified_occ <- full_occ |>
-  filter(
-    (place_name == "One Tam" & species %in% unverified_tam) |
-      (place_name == "Santa Monica Mountains" & species %in% unverified_sm) |
-      (place_name == "Marble/Salmon Mountains" & species %in% unverified_mm)
-  )  |> 
-  mutate(verifiedTaxon = "not verified")
-
+# Read in verified and unverified occurrences
+# from 00-data-prep.R
+verified_occ <- st_read("data/verified_occurrences_2025-04-18.gpkg")
+unverified_occ <- st_read("data/unverified_occurrences_2025-04-18.gpkg")
 
 full_verif_unverif_occ <- bind_rows(verified_occ, unverified_occ)
 
-# Now deduplicate and show whic are duplicates
-full_verif_unverif_dedup_occ <- full_verif_unverif_occ |> 
-  distinct(place_name, order, species, recordedby, basisofrecord, 
-decimallatitude, decimallongitude, day, month, year, verifiedTaxon, .keep_all = T) |> 
+# Now deduplicate and show which are duplicates
+full_verif_unverif_dedup_occ <- full_verif_unverif_occ |>
+  distinct(place_name, order, species, recordedby, basisofrecord,
+    decimallatitude, decimallongitude, day, month, year, verifiedTaxon,
+    .keep_all = T
+  ) |>
   mutate(keepWhenDeduplicating = "keep")
 
 duplicates <- full_verif_unverif_occ |>
@@ -106,16 +32,26 @@ duplicates <- full_verif_unverif_occ |>
 
 occ_w_dup_info <- bind_rows(full_verif_unverif_dedup_occ, duplicates)
 
+occ_w_dup_info |> count(keepWhenDeduplicating)
+
+# Read in species master
+gs4_auth(email = "ahill@calacademy.org")
+species_master <- read_sheet("https://docs.google.com/spreadsheets/d/19vRvSHKxrfHRVe0jgI3AncQyib1B1NBmDQ5-s3OKs5o/edit?gid=0#gid=0")
+
 # Add 'origin' to data
-final_occ_df <- occ_w_dup_info |> left_join(species_master |> 
-select(species, Origin), by = c("species")) |> 
-as_tibble() |> select(-geom)
+final_occ_df <- occ_w_dup_info |>
+  left_join(species_master |>
+    select(species, Origin), by = c("species")) |>
+  as_tibble()
 
 
-final_occ_df |> head()  |> View()
+final_occ_df |>
+  head() |>
+  View()
+final_occ_df |> filter(species == "Parietaria floridana")
 # Looks good
 #
-final_occ_df |> write_csv("data/full_occ_for_upload.csv")
+final_occ_df |> write_csv("data/full_gbif_for_analysis.csv")
 
 dataset_info <- final_occ_df |>
   group_by(datasetkey) |>
@@ -128,14 +64,103 @@ library(rgbif)
 derived_dataset_prep(
   citation_data = dataset_info,
   title = "Filtered GBIF dataset for Wilcox et al 2025",
-  description = "These are GBIF data from 3 study areas in California: Marble Mountains, Mount Tamalpais, and Santa Monica Mountains. These data were cleaned, deduplicated, and taxon names were verified. Also included is a column on origin, e.g. naturalized or historically native.",
-  source_url = "https://zenodo.org/records/14503844?token=eyJhbGciOiJIUzUxMiJ9.eyJpZCI6IjgyNjRmNGJiLTE4MDktNDQ3MS1hZmVhLWMwMTJlMzA0NTcyZCIsImRhdGEiOnt9LCJyYW5kb20iOiJlMDQ5MDQ5ZTA3MTYxYzllOWJjNTkwMWQyMDM2MjgxNiJ9.cvpHr4cU_MidUAtLmzYTkZ9ViRg1eX7NGyYJn6G0MVr0ZJAlaEz8wzdIDbIReiayKJhab0JXC6LHd3GGHMifXQ"
+  description = "These are GBIF data for land plants from 3 study areas in California: Marble Mountains, Mount Tamalpais, and Santa Monica Mountains. These data were cleaned, deduplicated, and taxon names were verified. Also included is a column on origin, e.g. naturalized or historically native.",
+  source_url = "https://zenodo.org/records/15238775"
 )
 
 # If output looks ok, run derived_dataset to register the dataset on GBIF
 derived_dataset(
- citation_data = dataset_info,
+  citation_data = dataset_info,
   title = "Filtered GBIF dataset for Wilcox et al 2025",
-  description = "These are GBIF data from 3 study areas in California: Marble Mountains, Mount Tamalpais, and Santa Monica Mountains. These data were cleaned, deduplicated, and taxon names were verified. Also included is a column on origin, e.g. naturalized or historically native.",
-  source_url = "https://zenodo.org/records/14503844?token=eyJhbGciOiJIUzUxMiJ9.eyJpZCI6IjgyNjRmNGJiLTE4MDktNDQ3MS1hZmVhLWMwMTJlMzA0NTcyZCIsImRhdGEiOnt9LCJyYW5kb20iOiJlMDQ5MDQ5ZTA3MTYxYzllOWJjNTkwMWQyMDM2MjgxNiJ9.cvpHr4cU_MidUAtLmzYTkZ9ViRg1eX7NGyYJn6G0MVr0ZJAlaEz8wzdIDbIReiayKJhab0JXC6LHd3GGHMifXQ"
+  description = "These are GBIF data for land plants from 3 study areas in California: Marble Mountains, Mount Tamalpais, and Santa Monica Mountains. These data were cleaned, deduplicated, and taxon names were verified. Also included is a column on origin, e.g. naturalized or historically native.",
+  source_url = "https://zenodo.org/records/15238775"
 )
+
+
+
+# Troubleshooting --------------------------------------------------------------
+# Okay now checking why there are inconsistencies with Becky's data
+library(tidyverse)
+library(sf)
+zenodo_og <- read_csv("data/full_occ_for_upload.csv")
+zenodo_og |>
+  head(10) |>
+  View()
+zenodo_og |>
+  filter(species == "Parietaria floridana")
+con |>
+  tbl("targ") |>
+  filter(species == "Parietaria floridana")
+verified_occ <- st_read("data/verified_occurrences.gpkg")
+verified_occ |>
+  filter(species == "Parietaria floridana")
+
+con |> dbExecute("CREATE TABLE old_occ AS
+SELECT *  EXCLUDE geom, ST_Point(decimallongitude, decimallatitude) AS geom
+FROM read_parquet('~/Projects/new-phytologist/shiny-aoi-exploration/occurrences_10-04-24.parquet');")
+
+con |>
+  tbl("old_occ") |>
+  filter(species == "Parietaria floridana") |>
+  collect() |>
+  View()
+
+con |> dbExecute("CREATE TABLE shiny_occ AS
+SELECT *  EXCLUDE geom, ST_Point(decimallongitude, decimallatitude) AS geom
+FROM read_parquet('~/Projects/new-phytologist/shiny-aoi-exploration/occurrences.parquet');")
+
+con |>
+  tbl("shiny_occ") |>
+  filter(species == "Parietaria floridana") |>
+  collect() |>
+  View()
+
+# Read in original/all GBIF records
+ogcon <- dbConnect(duckdb())
+ogcon |> dbExecute("INSTALL spatial; LOAD spatial;")
+
+# Load in GBIF records
+ogcon |> dbExecute("CREATE VIEW gbif AS
+SELECT * EXCLUDE stateprovince,
+ST_Point(decimallongitude, decimallatitude) AS geom,
+-- This fixes the problem I was having with queries
+nfc_normalize(stateprovince) AS stateprovince
+FROM read_parquet('~/Data/Occurrences/GBIF/occurrence.parquet/*', hive_partitioning = true);
+")
+ogcon |> dbExecute("
+DROP VIEW IF EXISTS places;
+CREATE VIEW places AS
+SELECT * EXCLUDE geom, ST_GeomFromText(geom) as geom
+FROM PARQUET_SCAN('~/Projects/new-phytologist/data/place_boundaries.parquet');")
+ogcon |> dbGetQuery("
+SELECT gbif.*--, name AS place_name
+  FROM gbif
+--  INNER JOIN places
+--  ON ST_INTERSECTS(gbif.geom, places.geom)
+  WHERE phylum = 'Tracheophyta'
+  -- AND kingdom = 'Plantae'
+  -- AND (coordinateuncertaintyinmeters < 500 OR coordinateuncertaintyinmeters is NULL)
+  AND species IS NOT NULL
+  AND stateprovince = 'California'
+  AND NOT species = ''
+  AND gbifid = '2565957851'
+")
+#' Okay Becky said Parietaria floridana is not in the GBIF dataset she has.
+#' it is present when you don't do spatial filtering.
+#' Let's see where it is
+library(arrow)
+
+place_boundaries <- read_parquet("data/place_boundaries.parquet") |>
+  st_as_sf(wkt = "geom", crs = 4326)
+
+Parietaria_floridana <- ogcon |>
+  tbl("gbif") |>
+  filter(gbifid == "2565957851") |>
+  collect() |>
+  st_as_sf(coords = c("decimallongitude", "decimallatitude"), crs = 4326)
+
+ggplot() +
+  geom_sf(data = place_boundaries |> filter(name == "Santa Monica Mountains")) +
+  geom_sf(data = Parietaria_floridana, color = "red", size = 3, shape = 4)
+
+# Okay, yay! Just use occurrences_2024-11-25.parquet
