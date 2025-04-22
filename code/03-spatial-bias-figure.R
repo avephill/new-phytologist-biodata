@@ -18,7 +18,7 @@ con |> dbExecute("INSTALL spatial; LOAD spatial;")
 con |> dbExecute("
 CREATE OR REPLACE TABLE occ AS
 SELECT *
-FROM st_read('data/verified_occurrences.gpkg');
+FROM st_read('data/verified_occurrences_dedup_2025-04-21.gpkg');
 ")
 
 con |> dbExecute("
@@ -91,8 +91,8 @@ rast_cnt_nest <- rast_cnt_list |>
 # Flatten it out into the right format
 # Feel weird about hardcoding this, but whatever
 rast_cnt_flat <- list(
-  rast_cnt_nest[[1]][[1]], rast_cnt_nest[[2]][[1]], rast_cnt_nest[[3]][[1]],
-  rast_cnt_nest[[1]][[2]], rast_cnt_nest[[2]][[2]], rast_cnt_nest[[3]][[2]]
+  rast_cnt_nest[[1]][[2]], rast_cnt_nest[[2]][[2]], rast_cnt_nest[[3]][[2]],
+  rast_cnt_nest[[1]][[1]], rast_cnt_nest[[2]][[1]], rast_cnt_nest[[3]][[1]]
 )
 
 names(rast_cnt_flat) <- places |>
@@ -171,7 +171,7 @@ rast_cnt_plots[[2]]
 
 
 ## Trails  ---------------------------------------
-trails <- st_read("data/place_roads.gpkg")
+trails <- st_read("data/place_roads_2025-04-21.gpkg")
 
 trail_plots <- trails |>
   group_split(name) |>
@@ -222,7 +222,7 @@ trail_lengths |> write_csv("results/spatial_bias_a-c.csv")
 
 
 # NNI ---------------------------------------
-nni_figuredf <- read_csv("results/nni_results.csv") |>
+nni_figuredf <- read_csv("results/nni_results_2025-04-21.csv") |>
   mutate(
     place_name = case_when(
       place_name == "Marble/Salmon Mountains" ~ "Marble Mountains",
@@ -315,7 +315,7 @@ nni_sum_df |> write_csv("results/spatial_bias_j-l.csv")
 
 # library(jsonlite)
 # random_trail <- read_csv("data/rand_nearest_trail.csv")
-nearest_trail <- read_csv("data/occ_nearest_trail.csv") # |>
+nearest_trail <- read_csv("data/occ_nearest_trail_2025-04-22.csv") # |>
 # bind_rows(random_trail)
 
 
@@ -340,6 +340,8 @@ glm_results <- nt_figready |>
   map(function(site_data) {
     site_name <- unique(site_data$place_name) # Extract site name
     glm_model <- glm(distance ~ basisofrecord, data = site_data)
+    # glm_model <- glm(distance ~ basisofrecord, data = site_data, family = Gamma(link = "log"))
+
     ci <- confint(glm_model)
     # browser()
     # Calculate estimated means for each level of basisofrecord
@@ -374,7 +376,7 @@ glm_results <- nt_figready |>
 # x$mean_ci
 # x$summary
 # glm_results[[]]
-
+# glm_results[[3]]$model$coefficients
 # x$mean_ci
 # x$ci
 
@@ -467,7 +469,7 @@ glm_results_df |> write_csv("results/spatial_bias_m-o.csv")
 master_plot <- list(trail_plots, rast_cnt_plots, nni_plots, neartrail_plots) |>
   list_flatten() |>
   wrap_plots(ncol = 3, heights = 1) +
-  plot_annotation(tag_levels = "a") &
+  plot_annotation(tag_levels = "a", tag_prefix = "(", tag_suffix = ")") &
   theme(plot.tag = element_text(size = 16, face = "bold"))
 
 ggsave("results/spatial_bias.pdf", master_plot, width = 15, height = 18, units = "in")
