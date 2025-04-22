@@ -45,10 +45,10 @@ COPY (
     SELECT feature_id,
     to_json(tags) AS tags_json,  -- Convert MAP to JSON
     name,
-    ST_AsWKB(osm.geometry) AS geom,
+    ST_AsWKB(osm.geometry) AS geom
     FROM osm
     JOIN places
-    ON ST_INTERSECTS(places.geom, osm.geometry)
+    ON ST_INTERSECTS(ST_ConvexHull(places.geom), osm.geometry)
     WHERE 'highway' IN map_keys(tags)
     AND ST_GeometryType(osm.geometry) != 'POINT'
 ) TO 'data/place_roads_prep.gpkg' (FORMAT 'GDAL', DRIVER 'GPKG', SRS 'EPSG:4326');
@@ -78,9 +78,9 @@ target_highways <- highways |>
 
 target_highways |> select(where(is.list))
 
-write_sf(target_highways, "data/place_roads.gpkg")
+write_sf(target_highways, sprintf("data/place_roads_%s.gpkg", format(Sys.Date(), "%Y-%m-%d")))
 
-x <- st_read("data/place_roads.gpkg")
+x <- st_read(sprintf("data/place_roads_%s.gpkg", format(Sys.Date(), "%Y-%m-%d")))
 library(sf)
 plot(x |> filter(name == "One Tam") |> st_geometry())
 View(x)
