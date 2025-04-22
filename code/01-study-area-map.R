@@ -11,6 +11,8 @@ library(stars)
 library(units)
 library(scales)
 library(terra)
+library(googlesheets4)
+library(wesanderson)
 
 
 con <- dbConnect(duckdb())
@@ -37,16 +39,6 @@ places <- con |>
   select(-geom) |>
   rename(geom = geom_wkt)
 
-# fix one tam
-# places <- places_prep |>
-#   filter(name != "One Tam") |>
-#   bind_rows(places_prep |> filter(name == "One Tam") |>
-#     st_cast("POLYGON") |>
-#     st_make_valid() %>%
-#     mutate(area = st_area(.)) |>
-#     slice_max(area, n = 2) |>
-#     group_by(name) |>
-#     summarise(geom = st_union(geom)))
 
 places_box <- places |>
   group_by(name) |>
@@ -54,33 +46,38 @@ places_box <- places |>
   ungroup()
 
 # Add verified filter
+ca_shp <- st_read("~/Data/Boundaries/Political/CA/CA.shp") |>
+  filter(NAME == "California")
 
-# full_occ <- con |>
-#   tbl("target") |>
-#   filter(
-#     # species %in% verified_tam$species,
-#     # place_name == "One Tam",
-#     basisofrecord %in% c("HUMAN_OBSERVATION", "PRESERVED_SPECIMEN")
-#   ) |>
-#   to_sf(conn = con, crs = 4326)
+# Herberia locations
+gs4_auth(email = "ahill@calacademy.org")
+herb_locs_prep <- read_sheet("https://docs.google.com/spreadsheets/d/1AaCGBef-L-ynJWg6N1HVZxQpHWTPGNYlI5yFpHz1s0g/edit?gid=0#gid=0")
 
-# tam_occ <- con |>
-#   tbl("target") |>
-#   filter(
-#     # species %in% verified_tam$species,
-#     place_name == "One Tam",
-#     basisofrecord %in% c("HUMAN_OBSERVATION", "PRESERVED_SPECIMEN")
-#   ) |>
-#   to_sf(conn = con, crs = 4326)
+herb_locs <- herb_locs_prep |>
+  filter(CollectionsToInclude == 1) |>
+  st_as_sf(coords = c("Longitudie_W", "Latitude_N"), crs = 4326)
 
-
-# area_extent <- st_as_sfc(st_bbox(tam_occ))
-
+# herb_locs |> View()
 
 statemap <- ggplot() +
-  annotation_map_tile("cartolight", zoom = 7) + # add basemap layer
+  # annotation_map_tile("cartolight", zoom = 7) + # add basemap layer
+  geom_sf(data = ca_shp, fill = NA, linewidth = 1, color = "grey") +
+  geom_sf(data = places, fill = "grey80", color = NA) +
+  geom_sf(data = herb_locs, aes(shape = Herb_sizeCat), color = "#AD6C86", size = 2.5) +
+  scale_shape_manual(
+    values = c("regular" = 1, "moderate-large" = 16),
+    name = "Herbarium Size",
+    labels = c("regular" = "<100,000 specimens", "moderate-large" = ">100,000 specimens")
+  ) +
   geom_sf(data = places_box, fill = NA, linewidth = 1, color = "black") +
+  theme_minimal() +
+  theme(
+    panel.grid = element_blank(),
+    axis.ticks = element_line(color = "grey20")
+  ) +
   coord_sf(xlim = c(-124.48, -114.13), ylim = c(32.53, 42.01), crs = 4326) +
+  scale_x_continuous(breaks = seq(-124, -114, by = 4)) +
+  scale_y_continuous(breaks = seq(34, 42, by = 4)) +
   annotation_scale(
     location = "bl",
     width_hint = .3
@@ -213,6 +210,7 @@ facet_plots <- peco_w_area |>
         fill = US_L3NAME, # ecoregion_perc_label,
         geometry = geom
       )) +
+      scale_fill_manual(values = wes_palette("GrandBudapest2", n = length(unique(peco_w_area$US_L3NAME)), type = "continuous")) +
       annotation_scale(
         location = .x$scale_position |> unique(), # "bl",
         width_hint = 0.2,
@@ -236,7 +234,7 @@ facet_plots <- peco_w_area |>
     # scale_fill_discrete(labels = function(x) str_wrap(x, width = 50))
   })
 
-
+# facet_plots
 
 # Combine the plots using patchwork
 # combined_plot <- guide_area() /
@@ -285,7 +283,7 @@ ann_text <- peco_w_area |>
     paste0(
       paste("Area:", unique(.x$place_areakm2) |> round(0), "km²"),
       "\n",
-      sprintf("Elev. range: %sm - %sm", .x$alt_min, .x$alt_max),
+      sprintf("Elev. range: %sm to %sm", .x$alt_min, .x$alt_max),
       "\n",
       sprintf("Elev. median: %sm", .x$alt_median)
     )
@@ -312,7 +310,18 @@ master_ann_plot <- ggdraw() +
   )
 ggsave("results/study_area_L3_ann.pdf", master_ann_plot, width = 11, height = 7, units = "in")
 
+# Add small inset of CA in USA
+usa_shp <- st_read("~/Data/Boundaries/Political/USA/USA.shp") |>
+  filter(COUNTRY == "USA") |>
+  st_union() # Dissolve all internal borders
 
+usa_minimal <- ggplot() +
+  geom_sf(data = usa_shp, fill = NA, color = "black", linewidth = 0.3) +
+  geom_sf(data = ca_shp, fill = "grey40", color = NA) +
+  theme_void() +
+  coord_sf(xlim = c(-125, -65), ylim = c(25, 50)) # Focus on contiguous USA
+
+ggsave("results/ca_inset.pdf", usa_minimal, width = 3, height = 1.5, units = "in")
 
 
 # mt. tam image: https://commons.wikimedia.org/wiki/File:Matt_Davis_Trail_Mt_Tamalpais_%28159382381%29.jpeg
