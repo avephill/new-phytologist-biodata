@@ -181,7 +181,19 @@ full_occ_prep <- con |>
   ) |>
   to_sf(conn = con, crs = 4326)
 
-full_occ <- full_occ_prep |>
+# Remove/patch points that are in the northern section of One Tam
+full_occ_prep |>
+  filter(place_name == "One Tam") |>
+  arrange(desc(decimallatitude)) |>
+  select(decimallatitude) |>
+  head(200) |>
+  View()
+
+full_occ_outtam <- full_occ_prep |>
+  filter(!(place_name == "One Tam") | (place_name == "One Tam" & decimallatitude < 38.05))
+nrow(full_occ_prep) - nrow(full_occ_outtam)
+
+full_occ <- full_occ_outtam |>
   mutate(across(
     where(is.list) & !matches("geom"),
     ~ map_chr(., ~ paste(.x, collapse = "; "))
