@@ -8,22 +8,28 @@ library(ggspatial)
 library(sf)
 library(spatstat)
 library(stars)
-
-
-# NNI Analysis ---------------------------------------
 library(tictoc)
 library(multidplyr)
 
-verified_occ <- st_read("data/verified_occurrences.gpkg")
+
+# NNI Analysis ---------------------------------------
+
+
+verified_occ <- st_read("data/verified_occurrences_dedup_2025-04-21.gpkg")
+# verified_occ |> head() |> View()
+# verified_occ |>
+#   filter(place_name == "One Tam", decimallatitude > 38.05) |>
+#   slice_head(n = 100) |>
+#   pull(decimallatitude)
 
 cluster <- new_cluster(2)
 
 tic()
-verified_nni <- verified_occ |>
+verified_nni_spec <- verified_occ |>
   # filter(place_name == "One Tam") |>
   group_split(species, place_name, basisofrecord) %>%
   map_dfr(~ {
-    browser()
+    # browser()
     if (nrow(.x) > 1) {
       nni_results <- nni(.x, win = "extent")
       .x |>
@@ -35,7 +41,7 @@ toc()
 
 # With family?
 tic()
-verified_nni <- verified_occ |>
+verified_nni_family <- verified_occ |>
   # filter(place_name == "One Tam") |>
   group_split(family, place_name, basisofrecord) %>%
   map_dfr(~ {
@@ -49,7 +55,7 @@ verified_nni <- verified_occ |>
   })
 toc()
 
-complete_nni <- verified_nni |>
+complete_nni <- verified_nni_family |>
   filter(is.finite(NNI)) |>
   as_tibble() |>
   filter(p < .05)
@@ -79,8 +85,13 @@ nni_ttest <- complete_nni |>
 nni_figuredf <- complete_nni |>
   left_join(nni_ttest)
 
-nni_figuredf |> write_csv("results/nni_results.csv")
+nni_figuredf |>
+  write_csv(sprintf(
+    "results/nni_results_%s.csv",
+    format(Sys.Date(), "%Y-%m-%d")
+  ))
 
+old_test <- read_csv("results/nni_results.csv")
 
 # t.test(log(NNI$NNI.h[which(NNI$p.h < 0.05 & NNI$p.o < 0.05)]), log(NNI$NNI.o[which(NNI$p.h < 0.05 & NNI$p.o < 0.05)])) # test for a difference bewteen herbarium and inat
 
